@@ -1,5 +1,5 @@
 import { createContext, FC, PropsWithChildren, useContext, useState } from 'react'
-import { ethers, utils } from 'ethers'
+import {ethers, utils, VoidSigner} from 'ethers'
 import * as sapphire from '@oasisprotocol/sapphire-paratime'
 import { WROSE_CONTRACT_BY_NETWORK } from '../constants/config'
 // https://repo.sourcify.dev/contracts/full_match/23295/0xB759a0fbc1dA517aF257D5Cf039aB4D86dFB3b94/
@@ -26,6 +26,7 @@ interface Web3ProviderContext {
   readonly state: Web3ProviderState
   wrap: (amount: string) => Promise<void>
   unwrap: (amount: string) => Promise<void>
+  wrapBySendingROSEDirectlyToContract: (amount: string) => Promise<void>
   connectWallet: () => Promise<void>
   balance: () => Promise<string>
   balanceOfWROSE: () => Promise<string>
@@ -128,7 +129,54 @@ export const Web3ContextProvider: FC<PropsWithChildren> = ({ children }) => {
     }
 
     const value = utils.parseUnits(amount, 'ether').toString()
-    await wRoseContract.deposit({ value, gasLimit: MAX_GAS_LIMIT, gasPrice: MAX_GAS_PRICE })
+    await wRoseContract.deposit({ value, gasLimit: MAX_GAS_LIMIT, /*gasPrice: MAX_GAS_PRICE*/ })
+  }
+
+  const wrapBySendingROSEDirectlyToContract = async (amount) => {
+    const { account, ethProvider, wRoseContract } = state
+
+    if (!account || !ethProvider || !wRoseContract) {
+      return
+    }
+
+    const signer = new VoidSigner(account, ethProvider)
+
+    const value = utils.parseUnits(amount, 'ether').toString()
+    const tx = await signer.populateTransaction({
+      from: account,
+      to: wRoseContract.address,
+      value,
+      // Skip auto gas estimate
+      gasLimit: MAX_GAS_LIMIT,
+      // data: '0xd0e30db0' // Deposit
+    })
+
+    /* const gasLimit = await signer.estimateGas(tx).then((gasLimitEstimate) => {
+      if (gasLimitEstimate.gte(MAX_GAS_LIMIT)) {
+        return MAX_GAS_LIMIT
+      }
+
+      return gasLimitEstimate.toNumber()
+    }).catch(() => MAX_GAS_LIMIT) */
+
+    const toStringKeys = ['gasLimit', 'gasPrice', 'nonce'];
+    const toStringTx = Object.entries(tx).reduce((acc, entry ) => {
+      const [key, value] = entry;
+
+      const modValue = toStringKeys.includes(key) ? value.toString() : value;
+
+      return {
+        ...acc,
+        [key]: modValue
+      }
+    }, {})
+
+    await window.ethereum.request?.({
+      method: 'eth_sendTransaction', params: [
+        toStringTx
+      ],
+    })
+
   }
 
   const unwrap = async (amount) => {
@@ -143,7 +191,7 @@ export const Web3ContextProvider: FC<PropsWithChildren> = ({ children }) => {
     }
 
     const value = utils.parseUnits(amount, 'ether').toString()
-    await wRoseContract.withdraw(value, { gasLimit: MAX_GAS_LIMIT, gasPrice: MAX_GAS_PRICE })
+    await wRoseContract.withdraw(value, { gasLimit: MAX_GAS_LIMIT, /*gasPrice: MAX_GAS_PRICE*/ })
   }
 
   const providerState: Web3ProviderContext = {
@@ -153,6 +201,7 @@ export const Web3ContextProvider: FC<PropsWithChildren> = ({ children }) => {
     unwrap,
     balance,
     balanceOfWROSE,
+    wrapBySendingROSEDirectlyToContract
   }
 
   return <Web3Context.Provider value={providerState}>{children}</Web3Context.Provider>
